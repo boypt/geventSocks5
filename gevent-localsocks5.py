@@ -44,25 +44,24 @@ class Socks5Server(StreamServer):
 
             port = struct.unpack('>H', rfile.read(2))
 
-            try:
-                if mode == 1:  # 1. Tcp connect
-                    reply = b"\x05\x00\x00\x01" + socket.inet_aton(addr) + \
-                                struct.pack(">H", port[0])
-                else:
-                    reply = b"\x05\x07\x00\x01"  # Command not supported
+            if mode == 1:  # 1. Tcp connect
+                reply = b"\x05\x00\x00\x01" + socket.inet_aton(addr) + \
+                            struct.pack(">H", port[0])
+                sock.send(reply)
+                log('Begin data, ' + str(address))
+                sock.setblocking(0)
 
-            except socket.error:
-                # Connection refused
-                reply = b'\x05\x05\x00\x01\x00\x00\x00\x00\x00\x00'
-
-            sock.send(reply)
-
-            # 3. Transfering
-            if reply[1] == '\x00':  # Success
-                if mode == 1:    # 1. Tcp connect
-                    log('Begin data, ' + str(address))
-                    sock.setblocking(0)
+                try:
+                    # 3. Transfering
                     self.handle_tcp(sock, (addr, port[0]))
+                except socket.error:
+                    # Connection refused
+                    reply = b'\x05\x05\x00\x01\x00\x00\x00\x00\x00\x00'
+                    sock.send(reply)
+                    raise
+            else:
+                reply = b"\x05\x07\x00\x01"  # Command not supported
+                sock.send(reply)
 
         except socket.error:
             log('socket error', exc_info=1)
