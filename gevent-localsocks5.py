@@ -45,27 +45,29 @@ class Socks5Server(StreamServer):
             port = struct.unpack('>H', rfile.read(2))
 
             if mode == 1:  # 1. Tcp connect
-                reply = b"\x05\x00\x00\x01" + socket.inet_aton(addr) + \
-                            struct.pack(">H", port[0])
-                sock.send(reply)
-                log('Begin data, ' + str(address))
-                sock.setblocking(0)
-
                 try:
-                    # 3. Transfering
-                    self.handle_tcp(sock, (addr, port[0]))
+                    remote = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                    remote.connect((addr, port[0]))
+                    log('TCP connected, %s:%s' % (addr, port[0]))
+                    reply = b"\x05\x00\x00\x01" + socket.inet_aton(addr) + \
+                                struct.pack(">H", port[0])
+                    sock.send(reply)
                 except socket.error:
+                    log('Conn refused, %s:%s' % (addr, port[0]))
                     # Connection refused
                     reply = b'\x05\x05\x00\x01\x00\x00\x00\x00\x00\x00'
                     sock.send(reply)
                     raise
+                else:
+                    log('Begin data, %s:%s' % (addr, port[0]))
+                    # 3. Transfering
+                    self.handle_tcp(sock, remote)
             else:
                 reply = b"\x05\x07\x00\x01"  # Command not supported
                 sock.send(reply)
 
         except socket.error:
-            log('socket error', exc_info=1)
-
+            pass
         finally:
             rfile.close()
             sock._sock.close()
@@ -87,10 +89,8 @@ class Socks5Server(StreamServer):
 
         return addr
 
-    def handle_tcp(self, sock, rm):
-        remote = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        remote.connect(rm)
-        log('TCP connected, ' + rm[0])
+    def handle_tcp(self, sock, remote):
+        sock.setblocking(0)
         remote.setblocking(0)
         fdset = [sock, remote]
         try:
