@@ -5,7 +5,7 @@ import struct
 import gevent
 assert gevent.version_info > (1, 0, 0, 0), "Need gevent 1.0.0+"
 
-from gevent import sleep, spawn
+from gevent import sleep, spawn, spawn_later, Greenlet
 from gevent import select, socket
 from gevent.server import StreamServer
 from gevent.socket import create_connection, gethostbyname
@@ -63,10 +63,9 @@ class Socks5Server(StreamServer):
                     # 3. Transfering
                     l1 = spawn(self.handle_tcp, sock, remote)
                     l2 = spawn(self.handle_tcp, remote, sock)
-                    gevent.joinall((l1,l2))
+                    gevent.joinall((l1, l2))
                     remote._sock.close()
                     remote.close()
-                    log('Close conn for %s:%s' % (addr, port[0]))
             else:
                 reply = b"\x05\x07\x00\x01"  # Command not supported
                 sock.send(reply)
@@ -74,7 +73,7 @@ class Socks5Server(StreamServer):
         except socket.error:
             pass
         finally:
-            log("close handle")
+            log("Close handle")
             rfile.close()
             sock._sock.close()
             sock.close()
@@ -87,8 +86,8 @@ class Socks5Server(StreamServer):
             log('Resolving ' + domain)
             addr = gethostbyname(domain)
             self.HOSTCACHE[domain] = addr
-            spawn(lambda a: (sleep(seconds=self.HOSTCACHETIME,
-                ref=False) is self.HOSTCACHE.pop(a, None)), domain)
+            spawn_later(self.HOSTCACHETIME,
+                    lambda a: self.HOSTCACHE.pop(a, None), domain)
         else:
             addr = self.HOSTCACHE[domain]
             log('Hit resolv %s -> %s in cache' % (domain, addr))
@@ -101,6 +100,7 @@ class Socks5Server(StreamServer):
                 continue
         except socket.error:
             pass
+
 
 def main():
 
