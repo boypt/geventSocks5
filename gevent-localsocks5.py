@@ -61,7 +61,12 @@ class Socks5Server(StreamServer):
                 else:
                     log('Begin data, %s:%s' % (addr, port[0]))
                     # 3. Transfering
-                    self.handle_tcp(sock, remote)
+                    l1 = spawn(self.handle_tcp, sock, remote)
+                    l2 = spawn(self.handle_tcp, remote, sock)
+                    gevent.joinall((l1,l2))
+                    remote._sock.close()
+                    remote.close()
+                    log('Close conn for %s:%s' % (addr, port[0]))
             else:
                 reply = b"\x05\x07\x00\x01"  # Command not supported
                 sock.send(reply)
@@ -69,6 +74,7 @@ class Socks5Server(StreamServer):
         except socket.error:
             pass
         finally:
+            log("close handle")
             rfile.close()
             sock._sock.close()
             sock.close()
@@ -89,23 +95,12 @@ class Socks5Server(StreamServer):
 
         return addr
 
-    def handle_tcp(self, sock, remote):
-        sock.setblocking(0)
-        remote.setblocking(0)
-        fdset = [sock, remote]
+    def handle_tcp(self, fr, to):
         try:
-            while True:
-                r, w, e = select.select(fdset, [], [], timeout=30)
-                if sock in r:
-                    if remote.send(sock.recv(4096)) <= 0:
-                        break
-                if remote in r:
-                    if sock.send(remote.recv(4096)) <= 0:
-                        break
-        finally:
-            remote._sock.close()
-            remote.close()
-
+            while to.send(fr.recv(4096)) > 0:
+                continue
+        except socket.error:
+            pass
 
 def main():
 
