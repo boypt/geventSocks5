@@ -9,6 +9,7 @@ from gevent import sleep, spawn, spawn_later, Greenlet
 from gevent import select, socket
 from gevent.server import StreamServer
 from gevent.socket import create_connection, gethostbyname
+from socketpool import ConnectionPool, TcpConnector
 
 import logging
 
@@ -16,11 +17,34 @@ logging.basicConfig(level=logging.DEBUG, format="%(asctime)s %(msg)s")
 logger = logging.getLogger(__file__)
 log = logger.debug
 
-
 class Socks5Server(StreamServer):
 
     HOSTCACHE = {}
     HOSTCACHETIME = 1800
+
+    def __init__(self, *args, **kw):
+        super(Socks5Server, self).__init__(*args, **kw)
+        self.remote_pool = ConnectionPool(factory=TcpConnector,
+                max_conn=None,
+                max_size=600,
+                max_lifetime=300,
+                backend="gevent")
+
+        def log_tcp_pool_size(s):
+            log("ConnPool size: %d, alive: %d" % (self.remote_pool.size(),
+                self.remote_pool.alive()))
+            spawn_later(10, s, s)
+
+        def log_dns_pool_size(s):
+            log("DNSPool size: %d" % len(self.HOSTCACHE))
+            spawn_later(10, s, s)
+
+        spawn_later(10, log_tcp_pool_size, log_tcp_pool_size)
+        spawn_later(10, log_dns_pool_size, log_dns_pool_size)
+
+    def close(self):
+        self.remote_pool.release_all()
+        super(Socks5Server, self).close()
 
     def handle(self, sock, address):
         rfile = sock.makefile('rb', -1)
@@ -46,26 +70,24 @@ class Socks5Server(StreamServer):
 
             if mode == 1:  # 1. Tcp connect
                 try:
-                    remote = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-                    remote.connect((addr, port[0]))
-                    log('TCP connected, %s:%s' % (addr, port[0]))
+                    remote = self.remote_pool.get(host=addr, port=port[0])
                     reply = b"\x05\x00\x00\x01" + socket.inet_aton(addr) + \
                                 struct.pack(">H", port[0])
                     sock.send(reply)
+                    log('Begin data, %s:%s' % (addr, port[0]))
+                    # 3. Transfering
+                    l1 = spawn(self.handle_tcp, sock, remote)
+                    l2 = spawn(self.handle_tcp, remote, sock)
+                    gevent.joinall((l1, l2))
+                    self.remote_pool.release_connection(remote)
+
                 except socket.error:
                     log('Conn refused, %s:%s' % (addr, port[0]))
                     # Connection refused
                     reply = b'\x05\x05\x00\x01\x00\x00\x00\x00\x00\x00'
                     sock.send(reply)
                     raise
-                else:
-                    log('Begin data, %s:%s' % (addr, port[0]))
-                    # 3. Transfering
-                    l1 = spawn(self.handle_tcp, sock, remote)
-                    l2 = spawn(self.handle_tcp, remote, sock)
-                    gevent.joinall((l1, l2))
-                    remote._sock.close()
-                    remote.close()
+
             else:
                 reply = b"\x05\x07\x00\x01"  # Command not supported
                 sock.send(reply)
@@ -79,8 +101,6 @@ class Socks5Server(StreamServer):
             sock.close()
 
     def handle_dns(self, domain):
-
-        log("Cache len: %d" % len(self.HOSTCACHE))
 
         if domain not in self.HOSTCACHE:
             log('Resolving ' + domain)
@@ -109,15 +129,15 @@ def main():
     server = Socks5Server(listen)
 
     def kill():
-        log("kill triggered")
+        logger.info("kill triggered")
         server.close()
-        spawn(lambda: (sleep(3) is os.closerange(3, 1024)))
+        spawn(lambda: (sleep(2) is os.closerange(3, 1024)))
 
     gevent.signal(signal.SIGTERM, kill)
     gevent.signal(signal.SIGQUIT, kill)
     gevent.signal(signal.SIGINT, kill)
     server.start()
-    log("Listening at %s" % str(listen))
+    logger.info("Listening at %s" % str(listen))
     gevent.run()
 
 if __name__ == "__main__":
